@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         registerStripAndPasteHotKey()
+        requestAccessibilityPermissionIfNeeded()
     }
     
     private func pasteIntoFrontmostApp() {
@@ -109,6 +110,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ] as CFDictionary
 
         return AXIsProcessTrustedWithOptions(options)
+    }
+
+    private func requestAccessibilityPermissionIfNeeded() {
+        guard !AXIsProcessTrusted() else {
+            return
+        }
+
+        _ = ensureAccessibilityPermission()
     }
     
     private func stripAndPaste() {
