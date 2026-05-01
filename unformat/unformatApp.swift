@@ -1,14 +1,8 @@
-//
-//  unformatApp.swift
-//  unformat
-//
-//  Created by David Haukeness on 5/1/26.
-//
-
 import AppKit
 
 @main
-struct UnformatMain {
+struct UnformatApp {
+    /// Boots the AppKit application manually so the menu bar delegate remains the entry point.
     @MainActor
     static func main() {
         let app = NSApplication.shared

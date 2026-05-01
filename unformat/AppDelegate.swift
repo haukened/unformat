@@ -3,6 +3,7 @@ import ApplicationServices
 import Carbon
 import UniformTypeIdentifiers
 
+/// Converts a short ASCII string into the four-character code used by Carbon APIs.
 private extension String {
     var fourCharCode: FourCharCode {
         var result: FourCharCode = 0
@@ -16,53 +17,108 @@ private extension String {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    // MARK: - Constants
+
+    private enum UI {
+        static let autoStripPollingInterval: TimeInterval = 0.333
+        static let autoStripDebounceInterval: TimeInterval = 0.15
+        static let pasteDelay: TimeInterval = 0.20
+        static let statusItemWidth: CGFloat = 24
+        static let statusItemFontSize: CGFloat = 18
+        static let statusItemBaselineOffset: CGFloat = -3
+        static let toggleContainerSize = NSSize(width: 280, height: 40)
+        static let horizontalInset: CGFloat = 14
+        static let labelSpacing: CGFloat = 12
+    }
+
+    private enum DefaultsKey {
+        static let autoStripEnabled = "UnformatAutoStripEnabled"
+    }
+
+    // MARK: - Properties
+
     private var statusItem: NSStatusItem?
     private var pasteboardChangeCount: Int = NSPasteboard.general.changeCount
     private var debounceWork: DispatchWorkItem?
+    private var pasteboardMonitor: Timer?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
-    private var hotKeyRegistrationFailed: Bool = false
     private var retryHotKeyItem: NSMenuItem?
-    private var enablePermissionItem: NSMenuItem?
-    private var menu: NSMenu?
-    private let autoStripEnabledKey = "UnformatAutoStripEnabled"
-    
+
     private var autoStripEnabled: Bool {
         get {
-            UserDefaults.standard.bool(forKey: autoStripEnabledKey)
+            UserDefaults.standard.bool(forKey: DefaultsKey.autoStripEnabled)
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: autoStripEnabledKey)
+            UserDefaults.standard.set(newValue, forKey: DefaultsKey.autoStripEnabled)
         }
     }
+
+    // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
 
+        configureStatusItem()
+        startPasteboardMonitoring()
+        registerStripAndPasteHotKey()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Stop observing before the app exits so the delegate releases cleanly.
+        pasteboardMonitor?.invalidate()
+        debounceWork?.cancel()
+
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+        }
+
+        if let hotKeyHandler {
+            RemoveEventHandler(hotKeyHandler)
+        }
+    }
+
+    // MARK: - Status Item
+
+    /// Builds the menu bar item and its menu-based controls.
+    private func configureStatusItem() {
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem = statusItem
 
         if let button = statusItem.button {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.alignment = .center
-
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 18, weight: .bold),
-                .paragraphStyle: paragraph,
-                .baselineOffset: -3
-            ]
-
-            button.attributedTitle = NSAttributedString(string: "U", attributes: attributes)
-            button.frame = NSRect(x: 0, y: 0, width: 24, height: NSStatusBar.system.thickness)
+            button.attributedTitle = makeStatusItemTitle()
+            button.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: UI.statusItemWidth,
+                height: NSStatusBar.system.thickness
+            )
         }
 
+        statusItem.menu = makeStatusMenu()
+    }
+
+    /// Creates the attributed title used in the menu bar.
+    private func makeStatusItemTitle() -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: UI.statusItemFontSize, weight: .bold),
+            .paragraphStyle: paragraph,
+            .baselineOffset: UI.statusItemBaselineOffset
+        ]
+
+        return NSAttributedString(string: "U", attributes: attributes)
+    }
+
+    /// Assembles the menu shown when the user clicks the status item.
+    private func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
-        self.menu = menu
 
         let autoItem = NSMenuItem()
         autoItem.view = makeAutoStripToggleView()
         menu.addItem(autoItem)
-        
         menu.addItem(.separator())
 
         let stripItem = NSMenuItem(
@@ -72,6 +128,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         stripItem.target = self
         menu.addItem(stripItem)
+
+        let retryItem = NSMenuItem(
+            title: "Retry Paste Shortcut",
+            action: #selector(retryHotKeyRegistration),
+            keyEquivalent: ""
+        )
+        retryItem.target = self
+        retryItem.isHidden = true
+        retryHotKeyItem = retryItem
+        menu.addItem(retryItem)
 
         menu.addItem(.separator())
 
@@ -83,45 +149,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
-
-        // Start a timer to observe pasteboard changes and auto-strip when enabled.
-        Timer.scheduledTimer(withTimeInterval: 0.333, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let pb = NSPasteboard.general
-            let currentCount = pb.changeCount
-            if currentCount != self.pasteboardChangeCount {
-                self.pasteboardChangeCount = currentCount
-                guard self.autoStripEnabled else { return }
-
-                // Debounce: wait briefly to let the writer finish updating all representations.
-                self.debounceWork?.cancel()
-                let work = DispatchWorkItem { [weak self] in
-                    self?.stripNow()
-                }
-                self.debounceWork = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-            }
-        }
-        
-        registerStripAndPasteHotKey()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            let trust = self?.isProcessTrusted()
-            print("Has Accessibility Permission: ", trust?.description ?? "unknown")
-        }
+        return menu
     }
-    
-    private func isProcessTrusted() -> Bool {
-        let options: NSDictionary = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString: true
-        ]
-        
+
+    // MARK: - Permissions and Input Simulation
+
+    /// Checks accessibility trust, optionally asking macOS to display the permission prompt.
+    private func isProcessTrusted(promptIfNeeded: Bool) -> Bool {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: promptIfNeeded]
+            as CFDictionary
+
         return AXIsProcessTrustedWithOptions(options)
     }
-    
-    private func pasteIntoFrontmostApp() {
-        print("Posting synthetic Command-V")
 
+    /// Posts a synthetic Command-V event sequence to the current foreground app.
+    private func pasteIntoFrontmostApp() {
         let source = CGEventSource(stateID: .privateState)
         source?.localEventsSuppressionInterval = 0
 
@@ -156,19 +198,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vUp?.post(tap: .cghidEventTap)
         commandUp?.post(tap: .cghidEventTap)
     }
-    
+
+    /// Converts the clipboard to plain text and pastes it into the active app.
     private func stripAndPaste() {
-        guard isProcessTrusted() else {
-            print("App does not have accessibility permissions to simulate paste command. Skipping.")
+        guard isProcessTrusted(promptIfNeeded: true) else {
             return
         }
+
         stripNow()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+        // Delay slightly so the updated plain-text pasteboard entry is visible to the target app.
+        DispatchQueue.main.asyncAfter(deadline: .now() + UI.pasteDelay) { [weak self] in
             self?.pasteIntoFrontmostApp()
         }
     }
-    
+
+    // MARK: - Hot Key Registration
+
+    /// Registers the global shortcut used to strip and paste in one step.
     private func registerStripAndPasteHotKey() {
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -197,7 +244,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         guard handlerStatus == noErr else {
-            print("InstallEventHandler failed:", handlerStatus)
             handleHotKeyRegistrationFailure(handlerStatus)
             return
         }
@@ -219,7 +265,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         guard hotKeyStatus == noErr else {
-            print("RegisterEventHotKey failed:", hotKeyStatus)
             if let hotKeyHandler {
                 RemoveEventHandler(hotKeyHandler)
                 self.hotKeyHandler = nil
@@ -229,13 +274,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        hotKeyRegistrationFailed = false
         retryHotKeyItem?.isHidden = true
-        print("Registered global hotkey: Control-Option-Command-V")
     }
 
+    /// Updates menu state and informs the user when the global shortcut cannot be registered.
     private func handleHotKeyRegistrationFailure(_ status: OSStatus) {
-        hotKeyRegistrationFailed = true
         retryHotKeyItem?.isHidden = false
 
         let message: String
@@ -248,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showHotKeyRegistrationAlert(message: message)
     }
 
+    /// Presents a blocking alert because hot key registration failures need direct user attention.
     private func showHotKeyRegistrationAlert(message: String) {
         let alert = NSAlert()
         alert.messageText = "Paste Shortcut Disabled"
@@ -257,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
+    /// Removes any stale registration before trying again.
     @objc private func retryHotKeyRegistration() {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
@@ -271,19 +316,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerStripAndPasteHotKey()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        // Tear down resources if needed
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-        }
-        
-        if let hotKeyHandler {
-            RemoveEventHandler(hotKeyHandler)
+    // MARK: - Clipboard Monitoring
+
+    /// Polls the general pasteboard and strips rich text after changes settle.
+    private func startPasteboardMonitoring() {
+        pasteboardMonitor = Timer.scheduledTimer(
+            withTimeInterval: UI.autoStripPollingInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.handlePasteboardChangeIfNeeded()
         }
     }
-    
+
+    /// Debounces pasteboard writes so the source app can finish publishing all representations.
+    private func handlePasteboardChangeIfNeeded() {
+        let pasteboard = NSPasteboard.general
+        let currentChangeCount = pasteboard.changeCount
+
+        guard currentChangeCount != pasteboardChangeCount else {
+            return
+        }
+
+        pasteboardChangeCount = currentChangeCount
+
+        guard autoStripEnabled else {
+            return
+        }
+
+        debounceWork?.cancel()
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.stripNow()
+        }
+
+        debounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + UI.autoStripDebounceInterval, execute: work)
+    }
+
+    // MARK: - Menu Views
+
+    /// Creates the custom menu row that pairs the automatic mode label with its switch.
     private func makeAutoStripToggleView() -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 40))
+        let container = NSView(frame: NSRect(origin: .zero, size: UI.toggleContainerSize))
 
         let label = NSTextField(labelWithString: "Automatic Stripping")
         label.font = .menuFont(ofSize: 0)
@@ -299,22 +373,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         container.addSubview(toggle)
 
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: UI.horizontalInset),
             label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
 
-            toggle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            toggle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -UI.horizontalInset),
             toggle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
 
-            label.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -12)
+            label.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -UI.labelSpacing)
         ])
 
         return container
     }
 
+    /// Persists the automatic stripping preference when the menu switch changes.
     @objc private func toggleAutomaticStrippingFromSwitch(_ sender: NSSwitch) {
         autoStripEnabled = sender.state == .on
     }
 
+    // MARK: - Clipboard Stripping
+
+    /// Rewrites the general pasteboard with only its plain-text representation.
     @objc private func stripNow() {
         let pasteboard = NSPasteboard.general
 
@@ -331,7 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteboard.setString(plainText, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
     }
-    
+
+    /// Determines whether the clipboard currently contains rich text that is safe to flatten.
     private func shouldStripClipboard(_ pasteboard: NSPasteboard) -> Bool {
         let types = pasteboard.types ?? []
 
@@ -352,13 +431,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         return true
     }
-    
+
+    /// Returns true when any available pasteboard type looks like rich text or HTML.
     private func containsRichTextRepresentation(_ types: [NSPasteboard.PasteboardType]) -> Bool {
         types.contains { type in
             isRichTextLike(type)
         }
     }
 
+    /// Handles both standard and loosely named rich-text pasteboard types.
     private func isRichTextLike(_ type: NSPasteboard.PasteboardType) -> Bool {
         switch type {
         case .rtf, .rtfd, .html:
@@ -386,6 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || uniformType.conforms(to: .html)
     }
 
+    /// Detects file-selection pasteboard payloads, which should not be rewritten as text.
     private func isFileLike(_ type: NSPasteboard.PasteboardType) -> Bool {
         switch type {
         case .fileURL:
@@ -409,6 +491,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         return uniformType.conforms(to: .fileURL)
     }
+
+    // MARK: - Actions
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
