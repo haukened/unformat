@@ -1,11 +1,26 @@
 import AppKit
+import Carbon
 import UniformTypeIdentifiers
+
+private extension String {
+    var fourCharCode: FourCharCode {
+        var result: FourCharCode = 0
+
+        for char in utf8.prefix(4) {
+            result = (result << 8) + FourCharCode(char)
+        }
+
+        return result
+    }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var autoStripEnabled: Bool = false
     private var pasteboardChangeCount: Int = NSPasteboard.general.changeCount
     private var debounceWork: DispatchWorkItem?
+    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyHandler: EventHandlerRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -63,10 +78,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
             }
         }
+        
+        registerStripAndPasteHotKey()
+    }
+    
+    private func pasteIntoFrontmostApp() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+
+        let keyDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: CGKeyCode(kVK_ANSI_V),
+            keyDown: true
+        )
+        keyDown?.flags = .maskCommand
+
+        let keyUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: CGKeyCode(kVK_ANSI_V),
+            keyDown: false
+        )
+        keyUp?.flags = .maskCommand
+
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
+    }
+    
+    private func ensureAccessibilityPermission() -> Bool {
+        let options = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true
+        ] as CFDictionary
+
+        return AXIsProcessTrustedWithOptions(options)
+    }
+    
+    private func stripAndPaste() {
+        guard ensureAccessibilityPermission() else {
+            return
+        }
+        
+        stripNow()
+        pasteIntoFrontmostApp()
+    }
+    
+    private func registerStripAndPasteHotKey() {
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, event, userData in
+                guard let userData else {
+                    return noErr
+                }
+
+                let appDelegate = Unmanaged<AppDelegate>
+                    .fromOpaque(userData)
+                    .takeUnretainedValue()
+
+                appDelegate.stripAndPaste()
+
+                return noErr
+            },
+            1,
+            &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &hotKeyHandler
+        )
+
+        let hotKeyID = EventHotKeyID(
+            signature: OSType("UNFT".fourCharCode),
+            id: 1
+        )
+
+        let modifiers = UInt32(cmdKey | optionKey | controlKey)
+
+        RegisterEventHotKey(
+            UInt32(kVK_ANSI_V),
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Tear down resources if needed
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+        }
+        
+        if let hotKeyHandler {
+            RemoveEventHandler(hotKeyHandler)
+        }
     }
     
     private func makeAutoStripToggleView() -> NSView {
@@ -102,31 +208,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoStripEnabled = sender.state == .on
     }
 
-    private func friendlyName(for type: NSPasteboard.PasteboardType) -> String {
-        switch type {
-        case .string:
-            return "Plain Text"
-        case .rtf:
-            return "RTF"
-        case .rtfd:
-            return "RTFD"
-        case .html:
-            return "HTML"
-        case .png:
-            return "PNG"
-        case .tiff:
-            return "TIFF"
-        case .fileURL:
-            return "File URL"
-        case NSPasteboard.PasteboardType("NeXT Rich Text Format"):
-            return "NeXT RTF"
-        case NSPasteboard.PasteboardType("com.microsoft.Object-Descriptor"):
-            return "Microsoft Object Descriptor"
-        default:
-            return type.rawValue
-        }
-    }
-
     @objc private func stripNow() {
         let pasteboard = NSPasteboard.general
 
@@ -139,6 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         pasteboard.clearContents()
+        pasteboard.declareTypes([.string], owner: nil)
         pasteboard.setString(plainText, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
     }
@@ -163,13 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         return true
     }
-
-    private func containsBlockedNonTextContent(_ types: [NSPasteboard.PasteboardType], pasteboard: NSPasteboard) -> Bool {
-        // Kept for debug output/backward compatibility with earlier logic.
-        // The strip decision now only blocks file-like clipboard payloads.
-        return types.contains(where: isFileLike)
-    }
-
+    
     private func containsRichTextRepresentation(_ types: [NSPasteboard.PasteboardType]) -> Bool {
         types.contains { type in
             isRichTextLike(type)
@@ -227,50 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return uniformType.conforms(to: .fileURL)
     }
 
-    private func isImageLike(_ type: NSPasteboard.PasteboardType) -> Bool {
-        switch type {
-        case .png, .tiff:
-            return true
-        default:
-            break
-        }
-
-        guard let uniformType = UTType(type.rawValue) else {
-            return false
-        }
-
-        return uniformType.conforms(to: .image)
-    }
-
-    private func isBinaryDocumentLike(_ type: NSPasteboard.PasteboardType) -> Bool {
-        let rawValue = type.rawValue.lowercased()
-
-        if rawValue.contains("pdf")
-            || rawValue.contains("postscript")
-            || rawValue.contains("movie")
-            || rawValue.contains("audio")
-            || rawValue.contains("video") {
-            return true
-        }
-
-        guard let uniformType = UTType(type.rawValue) else {
-            return false
-        }
-
-        return uniformType.conforms(to: .pdf)
-            || uniformType.conforms(to: .movie)
-            || uniformType.conforms(to: .audio)
-            || uniformType.conforms(to: .video)
-    }
-
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
-    }
-}
-
-private extension Array where Element: Hashable {
-    func uniquedPreservingOrder() -> [Element] {
-        var seen = Set<Element>()
-        return filter { seen.insert($0).inserted }
     }
 }
