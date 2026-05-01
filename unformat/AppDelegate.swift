@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import UniformTypeIdentifiers
 
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyHandler: EventHandlerRef?
     private var hotKeyRegistrationFailed: Bool = false
     private var retryHotKeyItem: NSMenuItem?
+    private var enablePermissionItem: NSMenuItem?
     private var menu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -51,16 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         stripItem.target = self
         menu.addItem(stripItem)
-
-        let retryHotKeyItem = NSMenuItem(
-            title: "Retry Paste Shortcut",
-            action: #selector(retryHotKeyRegistration),
-            keyEquivalent: ""
-        )
-        retryHotKeyItem.target = self
-        retryHotKeyItem.isHidden = true
-        self.retryHotKeyItem = retryHotKeyItem
-        menu.addItem(retryHotKeyItem)
 
         menu.addItem(.separator())
 
@@ -94,53 +86,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         registerStripAndPasteHotKey()
-        requestAccessibilityPermissionIfNeeded()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            let trust = self?.isProcessTrusted()
+            print("Has Accessibility Permission: ", trust?.description ?? "unknown")
+        }
+    }
+    
+    func isProcessTrusted() -> Bool {
+        let options: NSDictionary = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString: true
+        ]
+        
+        return AXIsProcessTrustedWithOptions(options)
     }
     
     private func pasteIntoFrontmostApp() {
-        let source = CGEventSource(stateID: .combinedSessionState)
+        print("Posting synthetic Command-V")
 
-        let keyDown = CGEvent(
+        let source = CGEventSource(stateID: .privateState)
+        source?.localEventsSuppressionInterval = 0
+
+        let commandDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: CGKeyCode(kVK_Command),
+            keyDown: true
+        )
+
+        let vDown = CGEvent(
             keyboardEventSource: source,
             virtualKey: CGKeyCode(kVK_ANSI_V),
             keyDown: true
         )
-        keyDown?.flags = .maskCommand
+        vDown?.flags = .maskCommand
 
-        let keyUp = CGEvent(
+        let vUp = CGEvent(
             keyboardEventSource: source,
             virtualKey: CGKeyCode(kVK_ANSI_V),
             keyDown: false
         )
-        keyUp?.flags = .maskCommand
+        vUp?.flags = .maskCommand
 
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
-    }
-    
-    private func ensureAccessibilityPermission() -> Bool {
-        let options = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true
-        ] as CFDictionary
+        let commandUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: CGKeyCode(kVK_Command),
+            keyDown: false
+        )
 
-        return AXIsProcessTrustedWithOptions(options)
-    }
-
-    private func requestAccessibilityPermissionIfNeeded() {
-        guard !AXIsProcessTrusted() else {
-            return
-        }
-
-        _ = ensureAccessibilityPermission()
+        commandDown?.post(tap: .cghidEventTap)
+        vDown?.post(tap: .cghidEventTap)
+        vUp?.post(tap: .cghidEventTap)
+        commandUp?.post(tap: .cghidEventTap)
     }
     
     private func stripAndPaste() {
-        guard ensureAccessibilityPermission() else {
+        guard isProcessTrusted() else {
+            print("App does not have accessibility permissions to simulate paste command. Skipping.")
             return
         }
-        
         stripNow()
-        pasteIntoFrontmostApp()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+            self?.pasteIntoFrontmostApp()
+        }
     }
     
     private func registerStripAndPasteHotKey() {
@@ -171,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         guard handlerStatus == noErr else {
+            print("InstallEventHandler failed:", handlerStatus)
             handleHotKeyRegistrationFailure(handlerStatus)
             return
         }
@@ -192,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         guard hotKeyStatus == noErr else {
+            print("RegisterEventHotKey failed:", hotKeyStatus)
             if let hotKeyHandler {
                 RemoveEventHandler(hotKeyHandler)
                 self.hotKeyHandler = nil
@@ -203,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotKeyRegistrationFailed = false
         retryHotKeyItem?.isHidden = true
+        print("Registered global hotkey: Control-Option-Command-V")
     }
 
     private func handleHotKeyRegistrationFailure(_ status: OSStatus) {
