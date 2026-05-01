@@ -43,7 +43,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem = statusItem
 
         if let button = statusItem.button {
-            button.title = "U"
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 18, weight: .bold),
+                .paragraphStyle: paragraph,
+                .baselineOffset: -3
+            ]
+
+            button.attributedTitle = NSAttributedString(string: "U", attributes: attributes)
+            button.frame = NSRect(x: 0, y: 0, width: 24, height: NSStatusBar.system.thickness)
         }
 
         let menu = NSMenu()
