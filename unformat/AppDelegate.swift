@@ -19,16 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
-        menu.addItem(.separator())
-
-        let autoItem = NSMenuItem(
-            title: "Automatic Stripping",
-            action: #selector(toggleAutomaticStripping(_:)),
-            keyEquivalent: ""
-        )
-        autoItem.target = self
-        autoItem.state = autoStripEnabled ? .on : .off
+        let autoItem = NSMenuItem()
+        autoItem.view = makeAutoStripToggleView()
         menu.addItem(autoItem)
+        
+        menu.addItem(.separator())
 
         let stripItem = NSMenuItem(
             title: "Strip Clipboard Now",
@@ -74,9 +69,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Tear down resources if needed
     }
     
-    @objc private func toggleAutomaticStripping(_ sender: NSMenuItem) {
-        autoStripEnabled.toggle()
-        sender.state = autoStripEnabled ? .on : .off
+    private func makeAutoStripToggleView() -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 40))
+
+        let label = NSTextField(labelWithString: "Automatic Stripping")
+        label.font = .menuFont(ofSize: 0)
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let toggle = NSSwitch()
+        toggle.state = autoStripEnabled ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(toggleAutomaticStrippingFromSwitch(_:))
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(label)
+        container.addSubview(toggle)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+
+            toggle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            toggle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+
+            label.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -12)
+        ])
+
+        return container
+    }
+
+    @objc private func toggleAutomaticStrippingFromSwitch(_ sender: NSSwitch) {
+        autoStripEnabled = sender.state == .on
     }
 
     private func friendlyName(for type: NSPasteboard.PasteboardType) -> String {
