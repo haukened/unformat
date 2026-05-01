@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var debounceWork: DispatchWorkItem?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
+    private var hotKeyRegistrationFailed: Bool = false
+    private var retryHotKeyItem: NSMenuItem?
+    private var menu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -33,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        self.menu = menu
 
         let autoItem = NSMenuItem()
         autoItem.view = makeAutoStripToggleView()
@@ -47,6 +51,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         stripItem.target = self
         menu.addItem(stripItem)
+
+        let retryHotKeyItem = NSMenuItem(
+            title: "Retry Paste Shortcut",
+            action: #selector(retryHotKeyRegistration),
+            keyEquivalent: ""
+        )
+        retryHotKeyItem.target = self
+        retryHotKeyItem.isHidden = true
+        self.retryHotKeyItem = retryHotKeyItem
+        menu.addItem(retryHotKeyItem)
 
         menu.addItem(.separator())
 
@@ -135,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             eventKind: UInt32(kEventHotKeyPressed)
         )
 
-        InstallEventHandler(
+        let handlerStatus = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
                 guard let userData else {
@@ -156,6 +170,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             &hotKeyHandler
         )
 
+        guard handlerStatus == noErr else {
+            handleHotKeyRegistrationFailure(handlerStatus)
+            return
+        }
+
         let hotKeyID = EventHotKeyID(
             signature: OSType("UNFT".fourCharCode),
             id: 1
@@ -163,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let modifiers = UInt32(cmdKey | optionKey | controlKey)
 
-        RegisterEventHotKey(
+        let hotKeyStatus = RegisterEventHotKey(
             UInt32(kVK_ANSI_V),
             modifiers,
             hotKeyID,
@@ -171,6 +190,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             0,
             &hotKeyRef
         )
+
+        guard hotKeyStatus == noErr else {
+            if let hotKeyHandler {
+                RemoveEventHandler(hotKeyHandler)
+                self.hotKeyHandler = nil
+            }
+
+            handleHotKeyRegistrationFailure(hotKeyStatus)
+            return
+        }
+
+        hotKeyRegistrationFailed = false
+        retryHotKeyItem?.isHidden = true
+    }
+
+    private func handleHotKeyRegistrationFailure(_ status: OSStatus) {
+        hotKeyRegistrationFailed = true
+        retryHotKeyItem?.isHidden = false
+
+        let message: String
+        if status == eventHotKeyExistsErr {
+            message = "The paste shortcut Control-Option-Command-V is already used by another app. Unformat will keep running, but the global paste shortcut is disabled."
+        } else {
+            message = "Unformat could not register the paste shortcut Control-Option-Command-V. Error code: \(status). Unformat will keep running, but the global paste shortcut is disabled."
+        }
+
+        showHotKeyRegistrationAlert(message: message)
+    }
+
+    private func showHotKeyRegistrationAlert(message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Paste Shortcut Disabled"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    @objc private func retryHotKeyRegistration() {
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+
+        if let hotKeyHandler {
+            RemoveEventHandler(hotKeyHandler)
+            self.hotKeyHandler = nil
+        }
+
+        registerStripAndPasteHotKey()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
