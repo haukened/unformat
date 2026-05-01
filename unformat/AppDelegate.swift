@@ -92,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    func isProcessTrusted() -> Bool {
+    private func isProcessTrusted() -> Bool {
         let options: NSDictionary = [
             kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString: true
         ]
