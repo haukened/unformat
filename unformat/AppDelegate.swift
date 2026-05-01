@@ -17,7 +17,6 @@ private extension String {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var autoStripEnabled: Bool = false
     private var pasteboardChangeCount: Int = NSPasteboard.general.changeCount
     private var debounceWork: DispatchWorkItem?
     private var hotKeyRef: EventHotKeyRef?
@@ -26,6 +25,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var retryHotKeyItem: NSMenuItem?
     private var enablePermissionItem: NSMenuItem?
     private var menu: NSMenu?
+    private let autoStripEnabledKey = "UnformatAutoStripEnabled"
+    
+    private var autoStripEnabled: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: autoStripEnabledKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: autoStripEnabledKey)
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
