@@ -5,13 +5,15 @@
 //  Created by David Haukeness on 5/1/26.
 //
 
-import SwiftUI
+import AppKit
 
 @main
-struct unformatApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+struct UnformatMain {
+    @MainActor
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
     }
 }
