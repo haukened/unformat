@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
     private var retryHotKeyItem: NSMenuItem?
+    private lazy var aboutWindowController = AboutWindowController()
 
     private var autoStripEnabled: Bool {
         get {
@@ -128,6 +129,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         stripItem.target = self
         menu.addItem(stripItem)
+
+        let aboutItem = NSMenuItem(
+            title: "About Unformat",
+            action: #selector(showAboutWindow),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+        menu.addItem(aboutItem)
 
         let retryItem = NSMenuItem(
             title: "Retry Paste Shortcut",
@@ -496,5 +505,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    /// Presents the app's custom About window.
+    @objc private func showAboutWindow() {
+        aboutWindowController.present()
     }
 }
