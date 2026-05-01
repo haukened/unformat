@@ -6,7 +6,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var autoStripEnabled: Bool = false
     private var pasteboardChangeCount: Int = NSPasteboard.general.changeCount
     private var debounceWork: DispatchWorkItem?
-    private var clipboardTypesItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -19,23 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-
-        let clipboardTypesItem = NSMenuItem(
-            title: currentClipboardTypesTitle(),
-            action: #selector(refreshClipboardTypes(_:)),
-            keyEquivalent: ""
-        )
-        clipboardTypesItem.target = self
-        self.clipboardTypesItem = clipboardTypesItem
-        menu.addItem(clipboardTypesItem)
-
-        let debugItem = NSMenuItem(
-            title: "Print Clipboard Debug Info",
-            action: #selector(printClipboardDebugInfo),
-            keyEquivalent: ""
-        )
-        debugItem.target = self
-        menu.addItem(debugItem)
 
         menu.addItem(.separator())
 
@@ -61,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitItem = NSMenuItem(
             title: "Quit Unformat",
             action: #selector(quit),
-            keyEquivalent: "q"
+            keyEquivalent: ""
         )
         quitItem.target = self
         menu.addItem(quitItem)
@@ -75,7 +57,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let currentCount = pb.changeCount
             if currentCount != self.pasteboardChangeCount {
                 self.pasteboardChangeCount = currentCount
-                self.updateClipboardTypesMenuItem()
                 guard self.autoStripEnabled else { return }
 
                 // Debounce: wait briefly to let the writer finish updating all representations.
@@ -96,71 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleAutomaticStripping(_ sender: NSMenuItem) {
         autoStripEnabled.toggle()
         sender.state = autoStripEnabled ? .on : .off
-    }
-
-    @objc private func refreshClipboardTypes(_ sender: NSMenuItem) {
-        updateClipboardTypesMenuItem()
-    }
-
-    @objc private func printClipboardDebugInfo() {
-        let pasteboard = NSPasteboard.general
-        let types = pasteboard.types ?? []
-        let hasString = pasteboard.canReadObject(forClasses: [NSString.self], options: nil)
-        let hasImage = pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
-        let plainText = pasteboard.string(forType: .string)
-
-        print("----- Clipboard Debug -----")
-        print("changeCount:", pasteboard.changeCount)
-        print("has NSString:", hasString)
-        print("has NSImage:", hasImage)
-        print("has rich text:", containsRichTextRepresentation(types))
-        print("has file-like type:", types.contains(where: isFileLike))
-        print("plain text length:", plainText?.count ?? 0)
-        print("should strip:", shouldStripClipboard(pasteboard))
-        print("types:")
-
-        for type in types {
-            print("-", type.rawValue)
-            print("  friendly:", friendlyName(for: type))
-            print("  rich:", isRichTextLike(type))
-            print("  file:", isFileLike(type))
-            print("  image:", isImageLike(type))
-            print("  binary:", isBinaryDocumentLike(type))
-
-            if let uniformType = UTType(type.rawValue) {
-                print("  utType:", uniformType.identifier)
-                print("  conforms plainText:", uniformType.conforms(to: .plainText))
-                print("  conforms text:", uniformType.conforms(to: .text))
-                print("  conforms rtf:", uniformType.conforms(to: .rtf))
-                print("  conforms rtfd:", uniformType.conforms(to: .rtfd))
-                print("  conforms html:", uniformType.conforms(to: .html))
-                print("  conforms image:", uniformType.conforms(to: .image))
-                print("  conforms fileURL:", uniformType.conforms(to: .fileURL))
-            } else {
-                print("  utType: nil")
-            }
-        }
-
-        print("---------------------------")
-    }
-
-    private func updateClipboardTypesMenuItem() {
-        clipboardTypesItem?.title = currentClipboardTypesTitle()
-    }
-
-    private func currentClipboardTypesTitle() -> String {
-        let pasteboard = NSPasteboard.general
-        let types = pasteboard.types ?? []
-
-        guard !types.isEmpty else {
-            return "Clipboard Types: Empty"
-        }
-
-        let detectedTypes = types
-            .map { friendlyName(for: $0) }
-            .uniquedPreservingOrder()
-
-        return "Clipboard Types: " + detectedTypes.joined(separator: ", ")
     }
 
     private func friendlyName(for type: NSPasteboard.PasteboardType) -> String {
@@ -202,7 +118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteboard.clearContents()
         pasteboard.setString(plainText, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
-        updateClipboardTypesMenuItem()
     }
     
     private func shouldStripClipboard(_ pasteboard: NSPasteboard) -> Bool {
