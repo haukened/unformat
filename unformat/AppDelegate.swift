@@ -1,20 +1,6 @@
 import AppKit
 import ApplicationServices
 import Carbon
-import UniformTypeIdentifiers
-
-/// Converts a short ASCII string into the four-character code used by Carbon APIs.
-private extension String {
-    var fourCharCode: FourCharCode {
-        var result: FourCharCode = 0
-
-        for char in utf8.prefix(4) {
-            result = (result << 8) + FourCharCode(char)
-        }
-
-        return result
-    }
-}
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Constants
@@ -24,11 +10,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let autoStripDebounceInterval: TimeInterval = 0.15
         static let pasteDelay: TimeInterval = 0.20
         static let statusItemWidth: CGFloat = 24
-        static let statusItemFontSize: CGFloat = 18
-        static let statusItemBaselineOffset: CGFloat = -3
-        static let toggleContainerSize = NSSize(width: 280, height: 40)
-        static let horizontalInset: CGFloat = 14
-        static let labelSpacing: CGFloat = 12
     }
 
     private enum DefaultsKey {
@@ -41,9 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteboardChangeCount: Int = NSPasteboard.general.changeCount
     private var debounceWork: DispatchWorkItem?
     private var pasteboardMonitor: Timer?
-    private var hotKeyRef: EventHotKeyRef?
-    private var hotKeyHandler: EventHandlerRef?
     private lazy var aboutWindowController = AboutWindowController()
+    private let clipboardStripper = ClipboardStripper()
+    private lazy var hotKeyManager = HotKeyManager { [weak self] in
+        self?.stripAndPaste()
+    }
 
     private var autoStripEnabled: Bool {
         get {
@@ -68,14 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Stop observing before the app exits so the delegate releases cleanly.
         pasteboardMonitor?.invalidate()
         debounceWork?.cancel()
-
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-        }
-
-        if let hotKeyHandler {
-            RemoveEventHandler(hotKeyHandler)
-        }
+        hotKeyManager.unregister()
     }
 
     // MARK: - Status Item
@@ -86,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem = statusItem
 
         if let button = statusItem.button {
-            button.attributedTitle = makeStatusItemTitle()
+            button.attributedTitle = StatusMenuBuilder.makeStatusItemTitle()
             button.frame = NSRect(
                 x: 0,
                 y: 0,
@@ -95,62 +71,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
-        statusItem.menu = makeStatusMenu()
-    }
-
-    /// Creates the attributed title used in the menu bar.
-    private func makeStatusItemTitle() -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: UI.statusItemFontSize, weight: .bold),
-            .paragraphStyle: paragraph,
-            .baselineOffset: UI.statusItemBaselineOffset
-        ]
-
-        return NSAttributedString(string: "U", attributes: attributes)
-    }
-
-    /// Assembles the menu shown when the user clicks the status item.
-    private func makeStatusMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        let autoItem = NSMenuItem()
-        autoItem.view = makeAutoStripToggleView()
-        menu.addItem(autoItem)
-        menu.addItem(.separator())
-
-        let stripItem = NSMenuItem(
-            title: "Strip Clipboard Now",
-            action: #selector(stripNow),
-            keyEquivalent: ""
+        statusItem.menu = StatusMenuBuilder.makeMenu(
+            target: self,
+            autoStripEnabled: autoStripEnabled,
+            toggleAction: #selector(toggleAutomaticStrippingFromSwitch(_:)),
+            stripAction: #selector(stripNow),
+            aboutAction: #selector(showAboutWindow),
+            quitAction: #selector(quit)
         )
-        stripItem.target = self
-        stripItem.image = NSImage(
-            systemSymbolName: "eraser", accessibilityDescription: String?("Strip Clipboard Now")
-        )
-        menu.addItem(stripItem)
-
-        let aboutItem = NSMenuItem(
-            title: "About Unformat",
-            action: #selector(showAboutWindow),
-            keyEquivalent: ""
-        )
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-
-        menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(
-            title: "Quit Unformat",
-            action: #selector(quit),
-            keyEquivalent: ""
-        )
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        return menu
     }
 
     // MARK: - Permissions and Input Simulation
@@ -218,61 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Registers the global shortcut used to strip and paste in one step.
     private func registerStripAndPasteHotKey() {
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-
-        let handlerStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
-            { _, event, userData in
-                guard let userData else {
-                    return noErr
-                }
-
-                let appDelegate = Unmanaged<AppDelegate>
-                    .fromOpaque(userData)
-                    .takeUnretainedValue()
-
-                appDelegate.stripAndPaste()
-
-                return noErr
-            },
-            1,
-            &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &hotKeyHandler
-        )
-
-        guard handlerStatus == noErr else {
-            handleHotKeyRegistrationFailure(handlerStatus)
-            return
-        }
-
-        let hotKeyID = EventHotKeyID(
-            signature: OSType("UNFT".fourCharCode),
-            id: 1
-        )
-
-        let modifiers = UInt32(cmdKey | optionKey | controlKey)
-
-        let hotKeyStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_V),
-            modifiers,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-
-        guard hotKeyStatus == noErr else {
-            if let hotKeyHandler {
-                RemoveEventHandler(hotKeyHandler)
-                self.hotKeyHandler = nil
-            }
-
-            handleHotKeyRegistrationFailure(hotKeyStatus)
-            return
+        if let status = hotKeyManager.register() {
+            handleHotKeyRegistrationFailure(status)
         }
     }
 
@@ -335,146 +210,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + UI.autoStripDebounceInterval, execute: work)
     }
 
-    // MARK: - Menu Views
-
-    /// Creates the custom menu row that pairs the automatic mode label with its switch.
-    private func makeAutoStripToggleView() -> NSView {
-        let container = NSView(frame: NSRect(origin: .zero, size: UI.toggleContainerSize))
-
-        let label = NSTextField(labelWithString: "Automatic Stripping")
-        label.font = .menuFont(ofSize: 0)
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        let toggle = NSSwitch()
-        toggle.state = autoStripEnabled ? .on : .off
-        toggle.target = self
-        toggle.action = #selector(toggleAutomaticStrippingFromSwitch(_:))
-        toggle.translatesAutoresizingMaskIntoConstraints = false
-
-        container.addSubview(label)
-        container.addSubview(toggle)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: UI.horizontalInset),
-            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-
-            toggle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -UI.horizontalInset),
-            toggle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-
-            label.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -UI.labelSpacing)
-        ])
-
-        return container
-    }
+    // MARK: - Actions
 
     /// Persists the automatic stripping preference when the menu switch changes.
     @objc private func toggleAutomaticStrippingFromSwitch(_ sender: NSSwitch) {
         autoStripEnabled = sender.state == .on
     }
 
-    // MARK: - Clipboard Stripping
-
     /// Rewrites the general pasteboard with only its plain-text representation.
     @objc private func stripNow() {
         let pasteboard = NSPasteboard.general
 
-        guard shouldStripClipboard(pasteboard) else {
-            return
-        }
-
-        guard let plainText = pasteboard.string(forType: .string), !plainText.isEmpty else {
-            return
-        }
-
-        pasteboard.clearContents()
-        pasteboard.declareTypes([.string], owner: nil)
-        pasteboard.setString(plainText, forType: .string)
-        pasteboardChangeCount = pasteboard.changeCount
-    }
-
-    /// Determines whether the clipboard currently contains rich text that is safe to flatten.
-    private func shouldStripClipboard(_ pasteboard: NSPasteboard) -> Bool {
-        let types = pasteboard.types ?? []
-
-        guard pasteboard.canReadObject(forClasses: [NSString.self], options: nil) else {
-            return false
-        }
-
-        guard containsRichTextRepresentation(types) else {
-            return false
-        }
-
-        // Do not rewrite file selections into path-like text.
-        // Rich text sources may also expose image/PDF flavors for embedded or printable content,
-        // so image/PDF presence alone must not block stripping.
-        guard !types.contains(where: isFileLike) else {
-            return false
-        }
-
-        return true
-    }
-
-    /// Returns true when any available pasteboard type looks like rich text or HTML.
-    private func containsRichTextRepresentation(_ types: [NSPasteboard.PasteboardType]) -> Bool {
-        types.contains { type in
-            isRichTextLike(type)
+        if clipboardStripper.stripIfNeeded(pasteboard) {
+            pasteboardChangeCount = pasteboard.changeCount
         }
     }
-
-    /// Handles both standard and loosely named rich-text pasteboard types.
-    private func isRichTextLike(_ type: NSPasteboard.PasteboardType) -> Bool {
-        switch type {
-        case .rtf, .rtfd, .html:
-            return true
-        default:
-            break
-        }
-
-        let rawValue = type.rawValue.lowercased()
-
-        if rawValue == "next rich text format" {
-            return true
-        }
-
-        if rawValue.contains("rtf") || rawValue.contains("rich text") || rawValue.contains("html") {
-            return true
-        }
-
-        guard let uniformType = UTType(type.rawValue) else {
-            return false
-        }
-
-        return uniformType.conforms(to: .rtf)
-            || uniformType.conforms(to: .rtfd)
-            || uniformType.conforms(to: .html)
-    }
-
-    /// Detects file-selection pasteboard payloads, which should not be rewritten as text.
-    private func isFileLike(_ type: NSPasteboard.PasteboardType) -> Bool {
-        switch type {
-        case .fileURL:
-            return true
-        default:
-            break
-        }
-
-        let rawValue = type.rawValue.lowercased()
-
-        if rawValue == "nsfilenamespboardtype"
-            || rawValue.contains("file-url")
-            || rawValue.contains("fileurl")
-            || rawValue.contains("filename") {
-            return true
-        }
-
-        guard let uniformType = UTType(type.rawValue) else {
-            return false
-        }
-
-        return uniformType.conforms(to: .fileURL)
-    }
-
-    // MARK: - Actions
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
