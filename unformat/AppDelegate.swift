@@ -43,7 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteboardMonitor: Timer?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
-    private var retryHotKeyItem: NSMenuItem?
     private lazy var aboutWindowController = AboutWindowController()
 
     private var autoStripEnabled: Bool {
@@ -137,16 +136,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         aboutItem.target = self
         menu.addItem(aboutItem)
-
-        let retryItem = NSMenuItem(
-            title: "Retry Paste Shortcut",
-            action: #selector(retryHotKeyRegistration),
-            keyEquivalent: ""
-        )
-        retryItem.target = self
-        retryItem.isHidden = true
-        retryHotKeyItem = retryItem
-        menu.addItem(retryItem)
 
         menu.addItem(.separator())
 
@@ -282,14 +271,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             handleHotKeyRegistrationFailure(hotKeyStatus)
             return
         }
-
-        retryHotKeyItem?.isHidden = true
     }
 
-    /// Updates menu state and informs the user when the global shortcut cannot be registered.
+    /// Informs the user when the global shortcut cannot be registered.
     private func handleHotKeyRegistrationFailure(_ status: OSStatus) {
-        retryHotKeyItem?.isHidden = false
-
         let message: String
         if status == eventHotKeyExistsErr {
             message = "The paste shortcut Control-Option-Command-V is already used by another app. Unformat will keep running, but the global paste shortcut is disabled."
@@ -308,21 +293,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
-    }
-
-    /// Removes any stale registration before trying again.
-    @objc private func retryHotKeyRegistration() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
-
-        if let hotKeyHandler {
-            RemoveEventHandler(hotKeyHandler)
-            self.hotKeyHandler = nil
-        }
-
-        registerStripAndPasteHotKey()
     }
 
     // MARK: - Clipboard Monitoring
