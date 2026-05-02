@@ -18,19 +18,28 @@ private final class AboutWindow: NSWindow {
     }
 }
 
+private protocol AppearanceAwareButton: AnyObject {
+    func updateAppearance()
+}
+
 /// Draws a rounded branded button with an inset image instead of relying on AppKit's default bezel layout.
 private final class BrandImageButton: NSButton {
     private let insetImageView = NSImageView()
+    private let imageProvider: (NSAppearance) -> NSImage
+    private let backgroundColorProvider: (NSAppearance) -> NSColor
 
     init(
-        image: NSImage,
-        backgroundColor: NSColor,
+        imageProvider: @escaping (NSAppearance) -> NSImage,
+        backgroundColorProvider: @escaping (NSAppearance) -> NSColor,
         cornerRadius: CGFloat,
         contentInsets: NSEdgeInsets,
         target: AnyObject?,
         action: Selector?,
         accessibilityLabel: String
     ) {
+        self.imageProvider = imageProvider
+        self.backgroundColorProvider = backgroundColorProvider
+
         super.init(frame: .zero)
 
         self.target = target
@@ -41,12 +50,10 @@ private final class BrandImageButton: NSButton {
         self.translatesAutoresizingMaskIntoConstraints = false
         self.setButtonType(.momentaryChange)
         self.wantsLayer = true
-        self.layer?.backgroundColor = backgroundColor.cgColor
         self.layer?.cornerRadius = cornerRadius
         self.layer?.masksToBounds = true
         self.setAccessibilityLabel(accessibilityLabel)
 
-        insetImageView.image = image
         insetImageView.imageScaling = .scaleProportionallyDown
         insetImageView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -58,6 +65,8 @@ private final class BrandImageButton: NSButton {
             insetImageView.topAnchor.constraint(equalTo: topAnchor, constant: contentInsets.top),
             insetImageView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -contentInsets.bottom)
         ])
+
+        updateAppearance()
     }
 
     @available(*, unavailable)
@@ -68,6 +77,73 @@ private final class BrandImageButton: NSButton {
     override func updateLayer() {
         super.updateLayer()
         layer?.opacity = isHighlighted ? 0.85 : 1
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+}
+
+extension BrandImageButton: AppearanceAwareButton {
+    func updateAppearance() {
+        let appearance = effectiveAppearance
+        insetImageView.image = imageProvider(appearance)
+        layer?.backgroundColor = backgroundColorProvider(appearance).cgColor
+    }
+}
+
+/// Draws a rounded branded button with attributed text that updates for light and dark mode.
+private final class BrandTextButton: NSButton {
+    private let titleProvider: (NSAppearance) -> NSAttributedString
+    private let backgroundColorProvider: (NSAppearance) -> NSColor
+
+    init(
+        titleProvider: @escaping (NSAppearance) -> NSAttributedString,
+        backgroundColorProvider: @escaping (NSAppearance) -> NSColor,
+        cornerRadius: CGFloat,
+        target: AnyObject?,
+        action: Selector?
+    ) {
+        self.titleProvider = titleProvider
+        self.backgroundColorProvider = backgroundColorProvider
+
+        super.init(frame: .zero)
+
+        self.target = target
+        self.action = action
+        self.isBordered = false
+        self.title = ""
+        self.translatesAutoresizingMaskIntoConstraints = false
+        self.setButtonType(.momentaryChange)
+        self.wantsLayer = true
+        self.layer?.cornerRadius = cornerRadius
+        self.layer?.masksToBounds = true
+
+        updateAppearance()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateLayer() {
+        super.updateLayer()
+        layer?.opacity = isHighlighted ? 0.85 : 1
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+}
+
+extension BrandTextButton: AppearanceAwareButton {
+    func updateAppearance() {
+        let appearance = effectiveAppearance
+        attributedTitle = titleProvider(appearance)
+        layer?.backgroundColor = backgroundColorProvider(appearance).cgColor
     }
 }
 
@@ -85,10 +161,16 @@ final class AboutWindowController: NSWindowController {
         static let githubButtonCornerRadius: CGFloat = 8
         static let githubButtonInsets = NSEdgeInsets(top: 10, left: 18, bottom: 10, right: 18)
         static let beerButtonCornerRadius: CGFloat = 8
-        static let buttonBackgroundColor = NSColor(
+        static let darkButtonBackgroundColor = NSColor(
             calibratedRed: 48 / 255,
             green: 55 / 255,
             blue: 65 / 255,
+            alpha: 1
+        )
+        static let lightButtonBackgroundColor = NSColor(
+            calibratedRed: 226 / 255,
+            green: 230 / 255,
+            blue: 236 / 255,
             alpha: 1
         )
     }
@@ -259,8 +341,8 @@ final class AboutWindowController: NSWindowController {
     /// Creates a GitHub button that uses the bundled GitHub lockup asset and brand styling.
     private func makeGitHubButton() -> NSButton {
         let button = BrandImageButton(
-            image: githubButtonImage,
-            backgroundColor: githubBrandColor,
+            imageProvider: githubButtonImage(for:),
+            backgroundColorProvider: buttonBackgroundColor(for:),
             cornerRadius: UI.githubButtonCornerRadius,
             contentInsets: UI.githubButtonInsets,
             target: self,
@@ -278,18 +360,13 @@ final class AboutWindowController: NSWindowController {
 
     /// Creates a monospace support button that matches the GitHub button's overall size.
     private func makeBeerButton() -> NSButton {
-        let button = NSButton(title: "", target: self, action: #selector(openBeerLink))
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
-        button.wantsLayer = true
-        button.layer?.backgroundColor = UI.buttonBackgroundColor.cgColor
-        button.layer?.cornerRadius = UI.beerButtonCornerRadius
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.white
-        ]
-        button.attributedTitle = NSAttributedString(string: "🍺 Buy me a Beer", attributes: attributes)
+        let button = BrandTextButton(
+            titleProvider: beerButtonTitle(for:),
+            backgroundColorProvider: buttonBackgroundColor(for:),
+            cornerRadius: UI.beerButtonCornerRadius,
+            target: self,
+            action: #selector(openBeerLink)
+        )
 
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: UI.beerButtonSize.width),
@@ -319,13 +396,22 @@ final class AboutWindowController: NSWindowController {
 
     private let copyrightSymbol: String = "\u{00A9}"
 
-    /// Uses the white GitHub lockup on the standard dark GitHub background.
-    private var githubButtonImage: NSImage {
-        NSImage(named: Asset.githubLockupWhite) ?? NSImage()
+    private func githubButtonImage(for appearance: NSAppearance) -> NSImage {
+        let assetName = appearance.isDarkMode ? Asset.githubLockupWhite : Asset.githubLockupBlack
+        return NSImage(named: assetName) ?? NSImage()
     }
 
-    private var githubBrandColor: NSColor {
-        UI.buttonBackgroundColor
+    private func beerButtonTitle(for appearance: NSAppearance) -> NSAttributedString {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: appearance.isDarkMode ? NSColor.white : NSColor.black
+        ]
+
+        return NSAttributedString(string: "🍺 Buy me a Beer", attributes: attributes)
+    }
+
+    private func buttonBackgroundColor(for appearance: NSAppearance) -> NSColor {
+        appearance.isDarkMode ? UI.darkButtonBackgroundColor : UI.lightButtonBackgroundColor
     }
 
     private var versionDescription: String {
@@ -362,5 +448,12 @@ final class AboutWindowController: NSWindowController {
     /// Opens the GNU GPL v3 license in the user's default browser.
     @objc private func openGPLv3() {
         NSWorkspace.shared.open(Link.gplv3)
+    }
+}
+
+private extension NSAppearance {
+    var isDarkMode: Bool {
+        let match = bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua
     }
 }
