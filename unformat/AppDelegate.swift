@@ -127,6 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         stripItem.target = self
+        stripItem.image = NSImage(
+            systemSymbolName: "eraser", accessibilityDescription: String?("Strip Clipboard Now")
+        )
         menu.addItem(stripItem)
 
         let aboutItem = NSMenuItem(
