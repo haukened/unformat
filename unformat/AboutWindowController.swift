@@ -215,7 +215,7 @@ final class AboutWindowController: NSWindowController {
         return button
     }
 
-    /// Displays the copyright owner and current build year.
+    /// Displays the copyright owner and the built app's year.
     private func makeCopyrightLabel() -> NSTextField {
         let label = NSTextField(labelWithString: "Copyright \(copyrightSymbol) \(buildYear) David Haukeness")
         label.font = .systemFont(ofSize: 12)
@@ -304,9 +304,19 @@ final class AboutWindowController: NSWindowController {
     }
 
     private var buildYear: Int {
-        Calendar.current.component(.year, from: Date())
+        let buildDate = bundleBuildDate ?? Date()
+        return Calendar.current.component(.year, from: buildDate)
     }
-    
+
+    /// Uses the bundle's file metadata as a proxy for when this app build was produced.
+    private var bundleBuildDate: Date? {
+        guard let resourceValues = try? Bundle.main.bundleURL.resourceValues(forKeys: [.contentModificationDateKey]) else {
+            return nil
+        }
+
+        return resourceValues.contentModificationDate
+    }
+
     private let copyrightSymbol: String = "\u{00A9}"
 
     /// Uses the white GitHub lockup on the standard dark GitHub background.
