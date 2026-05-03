@@ -28,7 +28,9 @@ enum StatusMenuBuilder {
     static func makeMenu(
         target: AnyObject,
         autoStripEnabled: Bool,
-        toggleAction: Selector,
+        launchAtLoginEnabled: Bool,
+        autoStripAction: Selector,
+        launchAtLoginAction: Selector,
         stripAction: Selector,
         aboutAction: Selector,
         quitAction: Selector
@@ -36,12 +38,23 @@ enum StatusMenuBuilder {
         let menu = NSMenu()
 
         let autoItem = NSMenuItem()
-        autoItem.view = makeAutoStripToggleView(
+        autoItem.view = makeToggleView(
             target: target,
-            autoStripEnabled: autoStripEnabled,
-            action: toggleAction
+            title: "Automatic Stripping",
+            isEnabled: autoStripEnabled,
+            action: autoStripAction
         )
         menu.addItem(autoItem)
+
+        let loginItem = NSMenuItem()
+        loginItem.view = makeToggleView(
+            target: target,
+            title: "Launch at Login",
+            isEnabled: launchAtLoginEnabled,
+            action: launchAtLoginAction
+        )
+        menu.addItem(loginItem)
+
         menu.addItem(.separator())
 
         let stripItem = NSMenuItem(
@@ -77,20 +90,21 @@ enum StatusMenuBuilder {
         return menu
     }
 
-    /// Creates the custom menu row that pairs the automatic mode label with its switch.
-    private static func makeAutoStripToggleView(
+    /// Creates a custom menu row that pairs a label with its switch.
+    private static func makeToggleView(
         target: AnyObject,
-        autoStripEnabled: Bool,
+        title: String,
+        isEnabled: Bool,
         action: Selector
     ) -> NSView {
         let container = NSView(frame: NSRect(origin: .zero, size: UI.toggleContainerSize))
 
-        let label = NSTextField(labelWithString: "Automatic Stripping")
+        let label = NSTextField(labelWithString: title)
         label.font = .menuFont(ofSize: 0)
         label.translatesAutoresizingMaskIntoConstraints = false
 
         let toggle = NSSwitch()
-        toggle.state = autoStripEnabled ? .on : .off
+        toggle.state = isEnabled ? .on : .off
         toggle.target = target
         toggle.action = action
         toggle.translatesAutoresizingMaskIntoConstraints = false

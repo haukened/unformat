@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteboardMonitor: Timer?
     private lazy var aboutWindowController = AboutWindowController()
     private let clipboardStripper = ClipboardStripper()
+    private let loginManager = LoginManager()
     private let clipboardMonitor = ClipboardMonitor(
         initialChangeCount: NSPasteboard.general.changeCount,
         debounceInterval: UI.autoStripDebounceInterval
@@ -81,7 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = StatusMenuBuilder.makeMenu(
             target: self,
             autoStripEnabled: autoStripEnabled,
-            toggleAction: #selector(toggleAutomaticStrippingFromSwitch(_:)),
+            launchAtLoginEnabled: loginManager.isLaunchAtLoginEnabled,
+            autoStripAction: #selector(toggleAutomaticStrippingFromSwitch(_:)),
+            launchAtLoginAction: #selector(toggleLaunchAtLoginFromSwitch(_:)),
             stripAction: #selector(stripNow),
             aboutAction: #selector(showAboutWindow),
             quitAction: #selector(quit)
@@ -217,6 +220,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoStripEnabled = sender.state == .on
     }
 
+    /// Updates login-item registration when the menu switch changes.
+    @objc private func toggleLaunchAtLoginFromSwitch(_ sender: NSSwitch) {
+        let desiredState = sender.state == .on
+
+        do {
+            try loginManager.setLaunchAtLogin(desiredState: desiredState)
+        } catch {
+            sender.state = loginManager.isLaunchAtLoginEnabled ? .on : .off
+            showLaunchAtLoginAlert(for: desiredState, error: error)
+        }
+    }
+
     /// Rewrites the general pasteboard with only its plain-text representation.
     @objc private func stripNow() {
         let pasteboard = NSPasteboard.general
@@ -233,5 +248,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Presents the app's custom About window.
     @objc private func showAboutWindow() {
         aboutWindowController.present()
+    }
+
+    /// Presents a warning when the app cannot update launch-at-login registration.
+    private func showLaunchAtLoginAlert(for desiredState: Bool, error: Error) {
+        let alert = NSAlert()
+        alert.messageText = desiredState ? "Could Not Enable Launch at Login" : "Could Not Disable Launch at Login"
+        alert.informativeText = "Unformat could not update its login item status. Error: \(error.localizedDescription)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
