@@ -19,11 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Properties
 
     private var statusItem: NSStatusItem?
-    private var pasteboardChangeCount: Int = NSPasteboard.general.changeCount
-    private var debounceWork: DispatchWorkItem?
     private var pasteboardMonitor: Timer?
     private lazy var aboutWindowController = AboutWindowController()
     private let clipboardStripper = ClipboardStripper()
+    private let clipboardMonitor = ClipboardMonitor(
+        initialChangeCount: NSPasteboard.general.changeCount,
+        debounceInterval: UI.autoStripDebounceInterval
+    )
     private lazy var hotKeyManager = HotKeyManager { [weak self] in
         self?.stripAndPaste()
     }
@@ -33,7 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.bool(forKey: DefaultsKey.autoStripEnabled)
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: DefaultsKey.autoStripEnabled)
+            UserDefaults.standard.set(
+                newValue,
+                forKey: DefaultsKey.autoStripEnabled
+            )
         }
     }
 
@@ -50,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Stop observing before the app exits so the delegate releases cleanly.
         pasteboardMonitor?.invalidate()
-        debounceWork?.cancel()
+        clipboardMonitor.cancelPendingWork()
         hotKeyManager.unregister()
     }
 
@@ -58,7 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Builds the menu bar item and its menu-based controls.
     private func configureStatusItem() {
-        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let statusItem = NSStatusBar.system.statusItem(
+            withLength: NSStatusItem.variableLength
+        )
         self.statusItem = statusItem
 
         if let button = statusItem.button {
@@ -85,7 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Checks accessibility trust, optionally asking macOS to display the permission prompt.
     private func isProcessTrusted(promptIfNeeded: Bool) -> Bool {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: promptIfNeeded]
+        let options =
+            [
+                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String:
+                    promptIfNeeded
+            ]
             as CFDictionary
 
         return AXIsProcessTrustedWithOptions(options)
@@ -137,7 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stripNow()
 
         // Delay slightly so the updated plain-text pasteboard entry is visible to the target app.
-        DispatchQueue.main.asyncAfter(deadline: .now() + UI.pasteDelay) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + UI.pasteDelay) {
+            [weak self] in
             self?.pasteIntoFrontmostApp()
         }
     }
@@ -155,9 +167,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleHotKeyRegistrationFailure(_ status: OSStatus) {
         let message: String
         if status == eventHotKeyExistsErr {
-            message = "The paste shortcut Control-Option-Command-V is already used by another app. Unformat will keep running, but the global paste shortcut is disabled."
+            message =
+                "The paste shortcut Control-Option-Command-V is already used by another app. Unformat will keep running, but the global paste shortcut is disabled."
         } else {
-            message = "Unformat could not register the paste shortcut Control-Option-Command-V. Error code: \(status). Unformat will keep running, but the global paste shortcut is disabled."
+            message =
+                "Unformat could not register the paste shortcut Control-Option-Command-V. Error code: \(status). Unformat will keep running, but the global paste shortcut is disabled."
         }
 
         showHotKeyRegistrationAlert(message: message)
@@ -188,26 +202,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Debounces pasteboard writes so the source app can finish publishing all representations.
     private func handlePasteboardChangeIfNeeded() {
         let pasteboard = NSPasteboard.general
-        let currentChangeCount = pasteboard.changeCount
-
-        guard currentChangeCount != pasteboardChangeCount else {
-            return
-        }
-
-        pasteboardChangeCount = currentChangeCount
-
-        guard autoStripEnabled else {
-            return
-        }
-
-        debounceWork?.cancel()
-
-        let work = DispatchWorkItem { [weak self] in
+        clipboardMonitor.processChangeCount(
+            pasteboard.changeCount,
+            autoStripEnabled: autoStripEnabled
+        ) { [weak self] in
             self?.stripNow()
         }
-
-        debounceWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + UI.autoStripDebounceInterval, execute: work)
     }
 
     // MARK: - Actions
@@ -222,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pasteboard = NSPasteboard.general
 
         if clipboardStripper.stripIfNeeded(pasteboard) {
-            pasteboardChangeCount = pasteboard.changeCount
+            clipboardMonitor.updateObservedChangeCount(pasteboard.changeCount)
         }
     }
 

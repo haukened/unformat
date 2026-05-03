@@ -145,3 +145,134 @@ struct ClipboardStripperTests {
         return pasteboard
     }
 }
+
+struct ClipboardMonitorTests {
+    @Test
+    func ignoresUnchangedPasteboardCount() {
+        var scheduledWorkItems: [DispatchWorkItem] = []
+        let monitor = ClipboardMonitor(
+            initialChangeCount: 5,
+            debounceInterval: 0.15
+        ) { _, work in
+            scheduledWorkItems.append(work)
+        }
+        var invocationCount = 0
+
+        monitor.processChangeCount(5, autoStripEnabled: true) {
+            invocationCount += 1
+        }
+
+        #expect(scheduledWorkItems.isEmpty)
+        #expect(invocationCount == 0)
+    }
+
+    @Test
+    func updatesObservedCountWithoutSchedulingWhenAutoStripIsDisabled() {
+        var scheduledWorkItems: [DispatchWorkItem] = []
+        let monitor = ClipboardMonitor(
+            initialChangeCount: 1,
+            debounceInterval: 0.15
+        ) { _, work in
+            scheduledWorkItems.append(work)
+        }
+        var invocationCount = 0
+
+        monitor.processChangeCount(2, autoStripEnabled: false) {
+            invocationCount += 1
+        }
+
+        monitor.processChangeCount(2, autoStripEnabled: true) {
+            invocationCount += 1
+        }
+
+        #expect(scheduledWorkItems.isEmpty)
+        #expect(invocationCount == 0)
+    }
+
+    @Test
+    func schedulesDebouncedWorkForChangedPasteboardCount() {
+        var scheduledDelay: TimeInterval?
+        var scheduledWork: DispatchWorkItem?
+        let monitor = ClipboardMonitor(
+            initialChangeCount: 1,
+            debounceInterval: 0.15
+        ) { delay, work in
+            scheduledDelay = delay
+            scheduledWork = work
+        }
+        var invocationCount = 0
+
+        monitor.processChangeCount(2, autoStripEnabled: true) {
+            invocationCount += 1
+        }
+
+        #expect(scheduledDelay == 0.15)
+        #expect(scheduledWork != nil)
+        #expect(invocationCount == 0)
+
+        scheduledWork?.perform()
+
+        #expect(invocationCount == 1)
+    }
+
+    @Test
+    func cancelsPreviousWorkWhenAnotherChangeArrives() {
+        var scheduledWorkItems: [DispatchWorkItem] = []
+        let monitor = ClipboardMonitor(
+            initialChangeCount: 1,
+            debounceInterval: 0.15
+        ) { _, work in
+            scheduledWorkItems.append(work)
+        }
+        var invocationCount = 0
+
+        monitor.processChangeCount(2, autoStripEnabled: true) {
+            invocationCount += 1
+        }
+        monitor.processChangeCount(3, autoStripEnabled: true) {
+            invocationCount += 1
+        }
+
+        #expect(scheduledWorkItems.count == 2)
+        #expect(scheduledWorkItems[0].isCancelled)
+        #expect(!scheduledWorkItems[1].isCancelled)
+
+        scheduledWorkItems[0].perform()
+        scheduledWorkItems[1].perform()
+
+        #expect(invocationCount == 1)
+    }
+
+    @Test
+    func canUpdateObservedCountAfterDirectClipboardMutation() {
+        var scheduledWorkItems: [DispatchWorkItem] = []
+        let monitor = ClipboardMonitor(
+            initialChangeCount: 1,
+            debounceInterval: 0.15
+        ) { _, work in
+            scheduledWorkItems.append(work)
+        }
+
+        monitor.updateObservedChangeCount(10)
+        monitor.processChangeCount(10, autoStripEnabled: true) {}
+
+        #expect(scheduledWorkItems.isEmpty)
+    }
+
+    @Test
+    func cancelPendingWorkCancelsLatestScheduledItem() {
+        var scheduledWorkItems: [DispatchWorkItem] = []
+        let monitor = ClipboardMonitor(
+            initialChangeCount: 1,
+            debounceInterval: 0.15
+        ) { _, work in
+            scheduledWorkItems.append(work)
+        }
+
+        monitor.processChangeCount(2, autoStripEnabled: true) {}
+        monitor.cancelPendingWork()
+
+        #expect(scheduledWorkItems.count == 1)
+        #expect(scheduledWorkItems[0].isCancelled)
+    }
+}
