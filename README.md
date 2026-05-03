@@ -1,3 +1,8 @@
+![GitHub License](https://img.shields.io/github/license/haukened/unformat)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/haukened/unformat)
+![Static Badge](https://img.shields.io/badge/MacOS-26.0+-blue)
+
+
 # Unformat
 
 A lightweight macOS menu bar utility that strips rich-text formatting from your clipboard, so you always paste plain text.
