@@ -68,3 +68,4 @@ Open `unformat.xcodeproj` in Xcode and build. No third-party dependencies — Un
 ---
 
 Copyright © David Haukeness
+Released under the [GNU General Public License v3.0](./LICENSE)
