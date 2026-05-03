@@ -1,15 +1,16 @@
 import AppKit
 import ApplicationServices
+import Combine
 import Carbon
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Constants
 
     private enum UI {
         static let autoStripPollingInterval: TimeInterval = 0.333
         static let autoStripDebounceInterval: TimeInterval = 0.15
         static let pasteDelay: TimeInterval = 0.20
-        static let statusItemWidth: CGFloat = 24
     }
 
     private enum DefaultsKey {
@@ -18,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Properties
 
-    private var statusItem: NSStatusItem?
     private var pasteboardMonitor: Timer?
     private lazy var aboutWindowController = AboutWindowController()
     private let clipboardStripper = ClipboardStripper()
@@ -31,24 +31,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self?.stripAndPaste()
     }
 
-    private var autoStripEnabled: Bool {
-        get {
-            UserDefaults.standard.bool(forKey: DefaultsKey.autoStripEnabled)
+    @Published var autoStripEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(autoStripEnabled, forKey: DefaultsKey.autoStripEnabled)
         }
-        set {
-            UserDefaults.standard.set(
-                newValue,
-                forKey: DefaultsKey.autoStripEnabled
-            )
-        }
+    }
+
+    @Published private(set) var isLaunchAtLoginEnabled: Bool
+
+    override init() {
+        autoStripEnabled = UserDefaults.standard.bool(forKey: DefaultsKey.autoStripEnabled)
+        isLaunchAtLoginEnabled = loginManager.isLaunchAtLoginEnabled
+        super.init()
     }
 
     // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
-
-        configureStatusItem()
         startPasteboardMonitoring()
         registerStripAndPasteHotKey()
     }
@@ -58,37 +58,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteboardMonitor?.invalidate()
         clipboardMonitor.cancelPendingWork()
         hotKeyManager.unregister()
-    }
-
-    // MARK: - Status Item
-
-    /// Builds the menu bar item and its menu-based controls.
-    private func configureStatusItem() {
-        let statusItem = NSStatusBar.system.statusItem(
-            withLength: NSStatusItem.variableLength
-        )
-        self.statusItem = statusItem
-
-        if let button = statusItem.button {
-            button.attributedTitle = StatusMenuBuilder.makeStatusItemTitle()
-            button.frame = NSRect(
-                x: 0,
-                y: 0,
-                width: UI.statusItemWidth,
-                height: NSStatusBar.system.thickness
-            )
-        }
-
-        statusItem.menu = StatusMenuBuilder.makeMenu(
-            target: self,
-            autoStripEnabled: autoStripEnabled,
-            launchAtLoginEnabled: loginManager.isLaunchAtLoginEnabled,
-            autoStripAction: #selector(toggleAutomaticStrippingFromSwitch(_:)),
-            launchAtLoginAction: #selector(toggleLaunchAtLoginFromSwitch(_:)),
-            stripAction: #selector(stripNow),
-            aboutAction: #selector(showAboutWindow),
-            quitAction: #selector(quit)
-        )
     }
 
     // MARK: - Permissions and Input Simulation
@@ -198,7 +167,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTimeInterval: UI.autoStripPollingInterval,
             repeats: true
         ) { [weak self] _ in
-            self?.handlePasteboardChangeIfNeeded()
+            Task { @MainActor [weak self] in
+                self?.handlePasteboardChangeIfNeeded()
+            }
         }
     }
 
@@ -213,41 +184,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Menu Actions
 
-    /// Persists the automatic stripping preference when the menu switch changes.
-    @objc private func toggleAutomaticStrippingFromSwitch(_ sender: NSSwitch) {
-        autoStripEnabled = sender.state == .on
+    /// Persists the automatic stripping preference when the menu toggle changes.
+    func setAutoStripEnabled(_ isEnabled: Bool) {
+        autoStripEnabled = isEnabled
     }
 
-    /// Updates login-item registration when the menu switch changes.
-    @objc private func toggleLaunchAtLoginFromSwitch(_ sender: NSSwitch) {
-        let desiredState = sender.state == .on
-
+    /// Updates login-item registration when the menu toggle changes.
+    func setLaunchAtLoginEnabled(_ isEnabled: Bool) {
         do {
-            try loginManager.setLaunchAtLogin(desiredState: desiredState)
+            try loginManager.setLaunchAtLogin(desiredState: isEnabled)
+            isLaunchAtLoginEnabled = loginManager.isLaunchAtLoginEnabled
         } catch {
-            sender.state = loginManager.isLaunchAtLoginEnabled ? .on : .off
-            showLaunchAtLoginAlert(for: desiredState, error: error)
+            isLaunchAtLoginEnabled = loginManager.isLaunchAtLoginEnabled
+            showLaunchAtLoginAlert(for: isEnabled, error: error)
         }
     }
 
     /// Rewrites the general pasteboard with only its plain-text representation.
-    @objc private func stripNow() {
+    func stripNowFromMenu() {
+        stripNow()
+    }
+
+    /// Presents the app's custom About window.
+    func showAboutWindowFromMenu() {
+        aboutWindowController.present()
+    }
+
+    func quitFromMenu() {
+        NSApplication.shared.terminate(nil)
+    }
+
+    /// Rewrites the general pasteboard with only its plain-text representation.
+    private func stripNow() {
         let pasteboard = NSPasteboard.general
 
         if clipboardStripper.stripIfNeeded(pasteboard) {
             clipboardMonitor.updateObservedChangeCount(pasteboard.changeCount)
         }
-    }
-
-    @objc private func quit() {
-        NSApplication.shared.terminate(nil)
-    }
-
-    /// Presents the app's custom About window.
-    @objc private func showAboutWindow() {
-        aboutWindowController.present()
     }
 
     /// Presents a warning when the app cannot update launch-at-login registration.

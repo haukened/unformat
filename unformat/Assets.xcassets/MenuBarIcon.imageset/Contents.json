@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "Unformat_Bold_U_Simple_40.svg",
       "idiom" : "universal",
       "scale" : "1x"
     },
@@ -16,5 +17,9 @@
   "info" : {
     "author" : "xcode",
     "version" : 1
+  },
+  "properties" : {
+    "preserves-vector-representation" : true,
+    "template-rendering-intent" : "template"
   }
 }
