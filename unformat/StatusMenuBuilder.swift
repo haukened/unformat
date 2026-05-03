@@ -20,6 +20,7 @@ private struct SettingsToggleRow: View {
 /// Renders the app's native SwiftUI menu bar extra content.
 struct StatusMenuContent: View {
     @ObservedObject var appDelegate: AppDelegate
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -42,12 +43,12 @@ struct StatusMenuContent: View {
             Divider()
 
             Button("Strip Clipboard Now", systemImage: "eraser") {
-                appDelegate.stripNowFromMenu()
+                performMenuAction(appDelegate.stripNowFromMenu)
             }
             .buttonStyle(.plain)
 
             Button("About Unformat", systemImage: "info.circle") {
-                appDelegate.showAboutWindowFromMenu()
+                performMenuAction(appDelegate.showAboutWindowFromMenu)
             }
             .buttonStyle(.plain)
 
@@ -62,5 +63,11 @@ struct StatusMenuContent: View {
         .tint(.accentColor)
         .frame(width: 260, alignment: .leading)
         .padding(16)
+    }
+
+    /// Closes the menu bar window before running an action that presents other UI.
+    private func performMenuAction(_ action: @escaping () -> Void) {
+        dismiss()
+        DispatchQueue.main.async(execute: action)
     }
 }
